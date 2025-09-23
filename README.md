@@ -1,3 +1,6 @@
+**博客文档** [【Edge扩展发布】一键导出B站评论区所有评论！](https://ldyer.top/2025/09/23/B%E7%AB%99%E6%89%A9%E5%B1%95/)
+**小红书扩展** [xhs-comments-extension](https://github.com/1dyer/xhs-comments-extension)
+
 ## 1. 展示
 
 ### 1.1 使用界面
