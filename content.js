@@ -1,3 +1,4 @@
+// content.js
 // 确保CryptoJS可用
 if (typeof CryptoJS === 'undefined') {
     const script = document.createElement('script');
@@ -80,12 +81,12 @@ function initCrawler() {
         .btn-start:hover {
             background: #0087b3;
         }
-        .btn-stop {
-            background: #ff4d4f;
+        .btn-pause {
+            background: #ff0000ff;
             color: white;
         }
-        .btn-stop:hover {
-            background: #d9363e;
+        .btn-pause:hover {
+            background: #ff0000ff;
         }
         .btn-download {
             background: #52c41a;
@@ -93,6 +94,14 @@ function initCrawler() {
         }
         .btn-download:hover {
             background: #389e0d;
+        }
+        /* 新增的继续按钮样式 */
+        .btn-continue {
+            background: #f59b15ff; 
+            color: white;
+        }
+        .btn-continue:hover {
+            background: #db7611ff;
         }
         .crawler-log {
             max-height: 150px;
@@ -150,7 +159,7 @@ function initCrawler() {
             </div>
             <div class="crawler-buttons">
                 <button class="crawler-btn btn-start" id="start-crawl">开始爬取</button>
-                <button class="crawler-btn btn-stop" id="stop-crawl" disabled>停止</button>
+                <button class="crawler-btn btn-pause" id="pause-crawl" disabled>暂停</button>
                 <button class="crawler-btn btn-download" id="download-csv" disabled>下载CSV</button>
             </div>
             <div class="crawler-log" id="crawler-log"></div>
@@ -164,7 +173,7 @@ function initCrawler() {
     const toggleBtn = container.querySelector('.crawler-toggle');
     const body = container.querySelector('.crawler-body');
     const startBtn = container.querySelector('#start-crawl');
-    const stopBtn = container.querySelector('#stop-crawl');
+    const pauseBtn = container.querySelector('#pause-crawl');
     const downloadBtn = container.querySelector('#download-csv');
     const crawledCount = container.querySelector('#crawled-count');
     const crawlerStatus = container.querySelector('#crawler-status');
@@ -172,7 +181,6 @@ function initCrawler() {
 
     // 折叠/展开功能
     let isExpanded = false;
-
     function togglePanel() {
         isExpanded = !isExpanded;
         if (isExpanded) {
@@ -181,11 +189,11 @@ function initCrawler() {
             container.classList.remove('expanded');
         }
     }
-
     header.addEventListener('click', togglePanel);
 
     // 状态变量
     let isCrawling = false;
+    let isPaused = false;
     let stopRequested = false;
     let comments = [];
     let bv = '';
@@ -202,24 +210,38 @@ function initCrawler() {
         const timeStr = now.toTimeString().substring(0, 8);
         const logEntry = document.createElement('div');
         logEntry.className = 'log-entry';
-
-        if (type === 'error') {
-            logEntry.classList.add('log-error');
-        } else if (type === 'warning') {
-            logEntry.classList.add('log-warning');
-        }
-
+        if (type === 'error') logEntry.classList.add('log-error');
+        if (type === 'warning') logEntry.classList.add('log-warning');
         logEntry.innerHTML = `<span class="log-time">[${timeStr}]</span> ${message}`;
         crawlerLog.appendChild(logEntry);
-        // 自动滚动到底部
         crawlerLog.scrollTop = crawlerLog.scrollHeight;
+    }
+
+    // 简单睡眠
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // 如果处于暂停，等待恢复
+    async function waitIfPaused() {
+        while (isPaused && !stopRequested) {
+            await sleep(200);
+        }
+    }
+
+    // 带暂停感知的等待（用于页面间短暂停顿或固定的5秒短暂停顿）
+    async function pauseAwareSleep(ms) {
+        const end = Date.now() + ms;
+        while (Date.now() < end) {
+            if (stopRequested) break;
+            if (isPaused) await waitIfPaused();
+            await sleep(200);
+        }
     }
 
     // 获取当前页面类型和ID
     function getPageInfo() {
         const path = window.location.pathname;
-        
-        // 判断页面类型
         if (path.includes('/video/')) {
             pageType = 1;
             const bvMatch = path.match(/\/video\/(BV\w+)/);
@@ -233,7 +255,6 @@ function initCrawler() {
             const opusMatch = path.match(/\/opus\/(\w+)/);
             return opusMatch ? opusMatch[1] : '';
         }
-        
         return '';
     }
 
@@ -242,17 +263,16 @@ function initCrawler() {
         return new Promise((resolve, reject) => {
             let url = '';
             let type = '';
-            
             switch (pageType) {
-                case 1: // 普通视频
+                case 1:
                     url = `https://www.bilibili.com/video/${id}`;
                     type = '视频';
                     break;
-                case 2: // 番剧
+                case 2:
                     url = `https://www.bilibili.com/bangumi/play/${id}`;
                     type = '番剧';
                     break;
-                case 3: // 动态
+                case 3:
                     url = `https://www.bilibili.com/opus/${id}`;
                     type = '动态';
                     break;
@@ -260,7 +280,7 @@ function initCrawler() {
                     reject(new Error('未知页面类型'));
                     return;
             }
-            
+
             fetch(url, {
                 credentials: 'include',
                 headers: {
@@ -269,37 +289,35 @@ function initCrawler() {
                 }
             })
             .then(response => {
-                if (response.ok) {
-                    return response.text();
-                }
+                if (response.ok) return response.text();
                 throw new Error(`获取页面失败: ${response.status}`);
             })
             .then(text => {
-                // 提取oid
-                let oid = "";
+                let oid = '';
                 switch (pageType) {
-                    case 1: // 普通视频
+                    case 1: {
                         const oidRegex = new RegExp(`"aid":(\\d+),"bvid":"${id}"`);
                         const oidMatch = text.match(oidRegex);
-                        oid = oidMatch ? oidMatch[1] : "";
+                        oid = oidMatch ? oidMatch[1] : '';
                         break;
-                    case 2: // 番剧
+                    }
+                    case 2: {
                         const aidMatch = text.match(/"aid":(\d+),/);
-                        oid = aidMatch ? aidMatch[1] : "";
+                        oid = aidMatch ? aidMatch[1] : '';
                         break;
-                    case 3: // 动态
+                    }
+                    case 3: {
                         const ridMatch = text.match(/"rid_str":"(\d+)"/);
-                        oid = ridMatch ? ridMatch[1] : "";
+                        oid = ridMatch ? ridMatch[1] : '';
                         break;
+                    }
                 }
-                
-                // 提取标题
-                let title = "未识别";
+
+                let title = '未识别';
                 try {
                     const titleMatch = text.match(/<title>(.+?)<\/title>/);
                     if (titleMatch && titleMatch[1]) {
                         title = titleMatch[1];
-                        // 移除B站后缀
                         if (title.includes('_哔哩哔哩_bilibili')) {
                             title = title.split('_哔哩哔哩_bilibili')[0];
                         }
@@ -307,7 +325,7 @@ function initCrawler() {
                 } catch (e) {
                     addLog(`标题提取失败: ${e.message}`, 'warning');
                 }
-                
+
                 addLog(`页面类型: ${type}`);
                 resolve({ oid, title });
             })
@@ -317,12 +335,12 @@ function initCrawler() {
         });
     }
 
-    // MD5加密
+    // MD5 加密
     function md5(str) {
         return CryptoJS.MD5(str).toString();
     }
 
-    // 获取B站Header
+    // 获取请求头
     function getHeader() {
         return {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0',
@@ -330,7 +348,7 @@ function initCrawler() {
         };
     }
 
-    // 发送请求
+    // 发送请求，返回 JSON
     function makeRequest(url) {
         return new Promise((resolve, reject) => {
             fetch(url, {
@@ -338,9 +356,7 @@ function initCrawler() {
                 headers: getHeader()
             })
             .then(response => {
-                if (response.ok) {
-                    return response.json();
-                }
+                if (response.ok) return response.json();
                 throw new Error(`请求失败: ${response.status}`);
             })
             .then(data => resolve(data))
@@ -357,214 +373,233 @@ function initCrawler() {
         const hours = String(date.getHours()).padStart(2, '0');
         const minutes = String(date.getMinutes()).padStart(2, '0');
         const seconds = String(date.getSeconds()).padStart(2, '0');
-        
         return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
     }
 
-    // 爬取评论
+    // 爬取评论（迭代实现，支持暂停/继续）
     async function startCrawl(isSecond = true) {
         if (stopRequested) {
             isCrawling = false;
             stopRequested = false;
             crawlerStatus.textContent = '已停止';
             startBtn.disabled = false;
-            stopBtn.disabled = true;
+            pauseBtn.disabled = true;
             downloadBtn.disabled = false;
+            pauseBtn.textContent = '暂停';
+            // 重置按钮样式
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
             addLog('爬取已停止');
             return;
         }
 
-        // 设置API参数
-        let mode = 2; // 2为最新评论，3为热门评论
+        let mode = 2; // 2为最新评论，3为热门
         let type = 1; // 普通视频和番剧为1，动态为11
         const plat = 1;
         const web_location = 1315875;
-        const wts = Math.floor(Date.now() / 1000);
 
-        // 动态页面特殊处理
         if (pageType === 3) {
             mode = 3;
             type = 11;
         }
 
-        let url;
-        if (nextPageID) {
-            const pagination_str = JSON.stringify({ offset: nextPageID });
-            const encoded_pagination = encodeURIComponent(pagination_str);
-            const code = `mode=${mode}&oid=${oid}&pagination_str=${encoded_pagination}&plat=${plat}&type=${type}&web_location=${web_location}&wts=${wts}ea1db124af3c7062474693fa704f4ff8`;
-            const w_rid = md5(code);
-            url = `https://api.bilibili.com/x/v2/reply/wbi/main?oid=${oid}&type=${type}&mode=${mode}&pagination_str=${encodeURIComponent(pagination_str)}&plat=1&web_location=1315875&w_rid=${w_rid}&wts=${wts}`;
-        } else {
-            const pagination_str = JSON.stringify({ offset: "" });
-            const encoded_pagination = encodeURIComponent(pagination_str);
-            const code = `mode=${mode}&oid=${oid}&pagination_str=${encoded_pagination}&plat=${plat}&seek_rpid=&type=${type}&web_location=${web_location}&wts=${wts}ea1db124af3c7062474693fa704f4ff8`;
-            const w_rid = md5(code);
-            url = `https://api.bilibili.com/x/v2/reply/wbi/main?oid=${oid}&type=${type}&mode=${mode}&pagination_str=${encodeURIComponent(pagination_str)}&plat=1&seek_rpid=&web_location=1315875&w_rid=${w_rid}&wts=${wts}`;
-        }
+        // 使用循环替代递归，避免调用栈过深
+        let localNext = nextPageID || '';
+        let continuePaging = true;
 
-        try {
-            const commentData = await makeRequest(url);
-            
-            if (!commentData.data || !commentData.data.replies) {
-                throw new Error('未获取到评论数据');
-            }
+        while (continuePaging && !stopRequested) {
+            await waitIfPaused();
 
-            for (const reply of commentData.data.replies) {
-                if (stopRequested) break;
-                
-                count++;
-                crawledCount.textContent = count;
-                
-                // 解析评论数据
-                const comment = {
-                    parent: reply.parent,
-                    rpid: reply.rpid,
-                    uid: reply.mid,
-                    name: reply.member.uname,
-                    level: reply.member.level_info.current_level,
-                    sex: reply.member.sex,
-                    avatar: reply.member.avatar,
-                    vip: reply.member.vip.vipStatus ? "是" : "否",
-                    IP: reply.reply_control?.location?.slice(5) || "未知",
-                    context: reply.content.message,
-                    reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()), // 使用格式化后的时间
-                    rereply: 0,
-                    like: reply.like,
-                    sign: reply.member.sign || ''
-                };
+            const wts = Math.floor(Date.now() / 1000);
+            let url = '';
 
-                // 获取回复数
-                if (reply.reply_control?.sub_reply_entry_text) {
-                    const match = reply.reply_control.sub_reply_entry_text.match(/\d+/);
-                    comment.rereply = match ? parseInt(match[0]) : 0;
-                }
-
-                comments.push(comment);
-                
-                // 爬取二级评论
-                if (isSecond && comment.rereply > 0) {
-                    await crawlSecondComments(oid, comment.rpid, comment.rereply, type);
-                }
-                
-                // 每100条休息5秒
-                if (count % 100 === 0 && count !== lastPauseTime) {
-                    lastPauseTime = count;
-                    addLog(`已爬取 ${count} 条评论，暂停5秒...`, 'warning');
-                    crawlerStatus.textContent = '暂停中...';
-                    
-                    // 暂停5秒
-                    await new Promise(resolve => {
-                        const pauseInterval = setInterval(() => {
-                            if (stopRequested) {
-                                clearInterval(pauseInterval);
-                                resolve();
-                            }
-                        }, 1000);
-                        
-                        setTimeout(() => {
-                            clearInterval(pauseInterval);
-                            crawlerStatus.textContent = '爬取中...';
-                            addLog('暂停结束，继续爬取');
-                            resolve();
-                        }, 5000);
-                    });
-                }
-            }
-
-            // 获取下一页
-            nextPageID = commentData.data?.cursor?.pagination_reply?.next_offset || 0;
-            
-            if (nextPageID && nextPageID !== 0) {
-                addLog(`爬取下一页，当前已爬取 ${count} 条`);
-                await new Promise(resolve => setTimeout(resolve, 500));
-                await startCrawl(isSecond);
+            if (localNext) {
+                const pagination_str = JSON.stringify({ offset: localNext });
+                const encoded_pagination = encodeURIComponent(pagination_str);
+                const code = `mode=${mode}&oid=${oid}&pagination_str=${encoded_pagination}&plat=${plat}&type=${type}&web_location=${web_location}&wts=${wts}ea1db124af3c7062474693fa704f4ff8`;
+                const w_rid = md5(code);
+                url = `https://api.bilibili.com/x/v2/reply/wbi/main?oid=${oid}&type=${type}&mode=${mode}&pagination_str=${encodeURIComponent(pagination_str)}&plat=1&web_location=${web_location}&w_rid=${w_rid}&wts=${wts}`;
             } else {
-                // 爬取完成
-                isCrawling = false;
-                crawlerStatus.textContent = '完成';
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-                downloadBtn.disabled = false;
-                addLog(`评论爬取完成！总共爬取 ${count} 条！`);
+                const pagination_str = JSON.stringify({ offset: "" });
+                const encoded_pagination = encodeURIComponent(pagination_str);
+                const code = `mode=${mode}&oid=${oid}&pagination_str=${encoded_pagination}&plat=${plat}&seek_rpid=&type=${type}&web_location=${web_location}&wts=${wts}ea1db124af3c7062474693fa704f4ff8`;
+                const w_rid = md5(code);
+                url = `https://api.bilibili.com/x/v2/reply/wbi/main?oid=${oid}&type=${type}&mode=${mode}&pagination_str=${encodeURIComponent(pagination_str)}&plat=1&seek_rpid=&web_location=${web_location}&w_rid=${w_rid}&wts=${wts}`;
             }
-        } catch (error) {
-            isCrawling = false;
-            crawlerStatus.textContent = '错误';
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            addLog(`爬取出错: ${error.message}`, 'error');
+
+            try {
+                const commentData = await makeRequest(url);
+                if (!commentData.data || !commentData.data.replies) {
+                    throw new Error('未获取到评论数据');
+                }
+
+                for (const reply of commentData.data.replies) {
+                    if (stopRequested) break;
+                    await waitIfPaused();
+
+                    count++;
+                    crawledCount.textContent = count;
+
+                    const comment = {
+                        parent: reply.parent,
+                        rpid: reply.rpid,
+                        uid: reply.mid,
+                        name: reply.member?.uname || '',
+                        level: reply.member?.level_info?.current_level || '',
+                        sex: reply.member?.sex || '',
+                        avatar: reply.member?.avatar || '',
+                        vip: reply.member?.vip?.vipStatus ? "是" : "否",
+                        IP: reply.reply_control?.location?.slice(5) || "未知",
+                        context: reply.content?.message || '',
+                        reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()),
+                        rereply: 0,
+                        like: reply.like || 0,
+                        sign: reply.member?.sign || ''
+                    };
+
+                    if (reply.reply_control?.sub_reply_entry_text) {
+                        const match = reply.reply_control.sub_reply_entry_text.match(/\d+/);
+                        comment.rereply = match ? parseInt(match[0]) : 0;
+                    }
+
+                    comments.push(comment);
+
+                    // 爬取二级评论
+                    if (isSecond && comment.rereply > 0) {
+                        await crawlSecondComments(oid, comment.rpid, comment.rereply, type);
+                    }
+
+                    // 每100条休息5秒（可被暂停/停止打断）
+                    if (count % 100 === 0 && count !== lastPauseTime && count % 1000 !== 0) {
+                        lastPauseTime = count;
+                        addLog(`已爬取 ${count} 条评论，暂停5秒...`, 'warning');
+                        crawlerStatus.textContent = '暂停中...';
+                        await pauseAwareSleep(5000);
+                        if (stopRequested) break;
+                        // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
+                        crawlerStatus.textContent = '爬取中...';
+                        addLog('暂停结束，继续爬取');
+                    }
+                    // 每1000条休息30秒（可被暂停/停止打断）
+                    if (count !== lastPauseTime && count % 1000 === 0) {
+                        lastPauseTime = count;
+                        addLog(`已爬取 ${count} 条评论，暂停30秒...`, 'warning');
+                        crawlerStatus.textContent = '暂停中...';
+                        await pauseAwareSleep(30000);
+                        if (stopRequested) break;
+                        // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
+                        crawlerStatus.textContent = '爬取中...';
+                        addLog('暂停结束，继续爬取');
+                    }
+
+                }
+
+                localNext = commentData.data?.cursor?.pagination_reply?.next_offset || 0;
+
+                if (stopRequested) break;
+
+                if (localNext && localNext !== 0) {
+                    addLog(`爬取下一页，当前已爬取 ${count} 条`);
+                    await pauseAwareSleep(500); // 页面间短暂休息
+                    // 继续下一轮循环（localNext 已被更新）
+                } else {
+                    continuePaging = false;
+                }
+            } catch (error) {
+                isCrawling = false;
+                crawlerStatus.textContent = '错误';
+                startBtn.disabled = false;
+                pauseBtn.disabled = true;
+                pauseBtn.textContent = '暂停';
+                // 重置按钮样式
+                pauseBtn.classList.remove('btn-continue');
+                pauseBtn.classList.add('btn-pause');
+                addLog(`爬取出错: ${error.message}`, 'error');
+                return;
+            }
         }
+
+        if (stopRequested) {
+            isCrawling = false;
+            crawlerStatus.textContent = '已停止';
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            downloadBtn.disabled = false;
+            pauseBtn.textContent = '暂停';
+            // 重置按钮样式
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
+            addLog('爬取已停止');
+            return;
+        }
+
+        // 爬取完成
+        isCrawling = false;
+        isPaused = false;
+        crawlerStatus.textContent = '完成';
+        startBtn.disabled = false;
+        pauseBtn.disabled = true;
+        downloadBtn.disabled = false;
+        pauseBtn.textContent = '暂停';
+        // 重置按钮样式
+        pauseBtn.classList.remove('btn-continue');
+        pauseBtn.classList.add('btn-pause');
+        addLog(`评论爬取完成！总共爬取 ${count} 条！`);
     }
 
     // 爬取二级评论
     async function crawlSecondComments(oid, rootRpid, totalReplies, type) {
         const pageSize = 10;
         const totalPages = Math.ceil(totalReplies / pageSize);
-        
+
         for (let page = 1; page <= totalPages; page++) {
             if (stopRequested) break;
-            
+            await waitIfPaused();
+
             const url = `https://api.bilibili.com/x/v2/reply/reply?oid=${oid}&type=${type}&root=${rootRpid}&ps=${pageSize}&pn=${page}&web_location=333.788`;
-            
+
             try {
                 const replyData = await makeRequest(url);
-                
-                if (!replyData.data || !replyData.data.replies) {
-                    continue;
-                }
-                
+                if (!replyData.data || !replyData.data.replies) continue;
+
                 for (const reply of replyData.data.replies) {
                     if (stopRequested) break;
-                    
+                    await waitIfPaused();
+
                     count++;
                     crawledCount.textContent = count;
-                    
+
                     const comment = {
                         parent: reply.parent,
                         rpid: reply.rpid,
                         uid: reply.mid,
-                        name: reply.member.uname,
-                        level: reply.member.level_info.current_level,
-                        sex: reply.member.sex,
-                        avatar: reply.member.avatar,
-                        vip: reply.member.vip.vipStatus ? "是" : "否",
+                        name: reply.member?.uname || '',
+                        level: reply.member?.level_info?.current_level || '',
+                        sex: reply.member?.sex || '',
+                        avatar: reply.member?.avatar || '',
+                        vip: reply.member?.vip?.vipStatus ? "是" : "否",
                         IP: reply.reply_control?.location?.slice(5) || "未知",
-                        context: reply.content.message,
-                        reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()), // 使用格式化后的时间
+                        context: reply.content?.message || '',
+                        reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()),
                         rereply: 0,
-                        like: reply.like,
-                        sign: reply.member.sign || ''
+                        like: reply.like || 0,
+                        sign: reply.member?.sign || ''
                     };
-                    
+
                     comments.push(comment);
-                    
-                    // 每100条休息5秒
+
                     if (count % 100 === 0 && count !== lastPauseTime) {
                         lastPauseTime = count;
                         addLog(`已爬取 ${count} 条评论，暂停5秒...`, 'warning');
                         crawlerStatus.textContent = '暂停中...';
-                        
-                        // 暂停5秒
-                        await new Promise(resolve => {
-                            const pauseInterval = setInterval(() => {
-                                if (stopRequested) {
-                                    clearInterval(pauseInterval);
-                                    resolve();
-                                }
-                            }, 1000);
-                            
-                            setTimeout(() => {
-                                clearInterval(pauseInterval);
-                                crawlerStatus.textContent = '爬取中...';
-                                addLog('暂停结束，继续爬取');
-                                resolve();
-                            }, 5000);
-                        });
+                        await pauseAwareSleep(5000);
+                        if (stopRequested) break;
+                        crawlerStatus.textContent = '爬取中...';
+                        addLog('暂停结束，继续爬取');
                     }
                 }
-                
-                // 每页之间稍作休息
-                await new Promise(resolve => setTimeout(resolve, 300));
+
+                await pauseAwareSleep(300);
             } catch (error) {
                 addLog(`二级评论爬取出错: ${error.message}`, 'error');
             }
@@ -577,93 +612,133 @@ function initCrawler() {
             addLog('没有评论数据可下载', 'error');
             return;
         }
-        
-        // CSV表头
-        const headers = ['序号', '上级评论ID', '评论ID', '用户ID', '用户名', '用户等级', '性别', '评论内容', '评论时间', '回复数', '点赞数', '个性签名', 'IP属地', '是否是大会员', '头像'];
-        
-        // 构建CSV内容 - 添加BOM头解决中文乱码问题
-        const BOM = '\uFEFF'; // UTF-8 BOM
-        let csvContent = BOM + headers.join(',') + '\n';
-        
-        comments.forEach((comment, index) => {
-            const row = [
-                index + 1,
-                comment.parent,
-                comment.rpid,
-                comment.uid,
-                `"${(comment.name || '').replace(/"/g, '""')}"`,
-                comment.level,
-                comment.sex,
-                `"${(comment.context || '').replace(/"/g, '""')}"`,
-                comment.reply_time, // 使用格式化后的时间
-                comment.rereply,
-                comment.like,
-                `"${(comment.sign || '').replace(/"/g, '""')}"`,
-                comment.IP,
-                comment.vip,
-                comment.avatar
-            ];
-            csvContent += row.join(',') + '\n';
-        });
-        
-        // 发送下载请求到后台
-        chrome.runtime.sendMessage({
-            action: 'downloadCSV',
-            csvContent: csvContent,
-            filename: `${(title || 'B站评论').substring(0, 8)}_评论.csv`
-        });
+
+        addLog('开始生成CSV文件...');
+
+        try {
+            const headers = ['序号', '上级评论ID', '评论ID', '用户ID', '用户名', '用户等级', '性别', '评论内容', '评论时间', '回复数', '点赞数', '个性签名', 'IP属地', '是否是大会员', '头像'];
+            const BOM = '\uFEFF';
+            let csvContent = BOM + headers.join(',') + '\n';
+
+            const batchSize = 1000;
+            for (let i = 0; i < comments.length; i += batchSize) {
+                const batch = comments.slice(i, i + batchSize);
+                batch.forEach((comment, index) => {
+                    const row = [
+                        i + index + 1,
+                        comment.parent || '',
+                        comment.rpid,
+                        comment.uid,
+                        `"${(comment.name || '').replace(/"/g, '""')}"`,
+                        comment.level,
+                        comment.sex,
+                        `"${(comment.context || '').replace(/"/g, '""')}"`,
+                        comment.reply_time,
+                        comment.rereply,
+                        comment.like,
+                        `"${(comment.sign || '').replace(/"/g, '""')}"`,
+                        comment.IP,
+                        comment.vip,
+                        comment.avatar
+                    ];
+                    csvContent += row.join(',') + '\n';
+                });
+            }
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+
+            const safeTitle = (title || 'B站评论').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
+            a.download = `${safeTitle}_评论.csv`;
+
+            document.body.appendChild(a);
+            a.click();
+
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                addLog(`CSV文件已开始下载: ${a.download}`);
+            }, 100);
+        } catch (error) {
+            addLog(`生成CSV失败: ${error.message}`, 'error');
+        }
     }
 
     // 开始爬取按钮事件
     startBtn.addEventListener('click', async () => {
         if (isCrawling) return;
-        
+
         isCrawling = true;
         stopRequested = false;
+        isPaused = false;
         startBtn.disabled = true;
-        stopBtn.disabled = false;
-        downloadBtn.disabled = true;
+        pauseBtn.disabled = false;
+        downloadBtn.disabled = true; // 爬取过程中禁用下载
         crawlerStatus.textContent = '爬取中...';
         crawledCount.textContent = '0';
         comments = [];
         count = 0;
         lastPauseTime = 0;
-        
+
+        // 确保暂停按钮初始样式为黄色
+        pauseBtn.classList.remove('btn-continue');
+        pauseBtn.classList.add('btn-pause');
+        pauseBtn.textContent = '暂停';
+
         // 清空日志
         crawlerLog.innerHTML = '';
-        addLog('作者博客地址：ldyer.top  开始爬取评论...');
-        
+        addLog('当前版本2.2');
+        addLog('作者博客地址：ldyer.top')
+        addLog('开始爬取评论...')
+
         try {
-            // 获取当前页面信息
             const pageId = getPageInfo();
-            if (!pageId) {
-                throw new Error('无法获取页面ID');
-            }
-            
+            if (!pageId) throw new Error('无法获取页面ID');
             const info = await getInformation(pageId);
             oid = info.oid;
             title = info.title;
-            
             addLog(`页面标题: ${title}`);
             addLog(`页面oid: ${oid}`);
-            
             nextPageID = '';
             await startCrawl(true);
         } catch (error) {
             isCrawling = false;
             crawlerStatus.textContent = '错误';
             startBtn.disabled = false;
-            stopBtn.disabled = true;
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = '暂停';
+            // 重置按钮样式
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
             addLog(`初始化失败: ${error.message}`, 'error');
         }
     });
 
-    // 停止按钮事件
-    stopBtn.addEventListener('click', () => {
-        if (isCrawling) {
-            stopRequested = true;
-            crawlerStatus.textContent = '停止中...';
-            addLog('正在停止爬取...');
+    // 暂停/继续按钮事件
+    pauseBtn.addEventListener('click', () => {
+        if (!isCrawling) return;
+        if (!isPaused) {
+            isPaused = true;
+            pauseBtn.textContent = '继续';
+            // 切换为绿色按钮样式
+            pauseBtn.classList.remove('btn-pause');
+            pauseBtn.classList.add('btn-continue');
+            crawlerStatus.textContent = '已暂停';
+            // 关键修改：暂停时启用下载按钮
+            downloadBtn.disabled = false;
+            addLog('爬取已暂停');
+        } else {
+            isPaused = false;
+            pauseBtn.textContent = '暂停';
+            // 切换回黄色按钮样式
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
+            crawlerStatus.textContent = '爬取中...';
+            // 继续爬取时禁用下载按钮
+            downloadBtn.disabled = true;
+            addLog('继续爬取...');
         }
     });
 
