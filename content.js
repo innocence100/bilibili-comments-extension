@@ -651,7 +651,7 @@ function initCrawler() {
             a.href = url;
 
             const safeTitle = (title || 'B站评论').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
-            a.download = `${safeTitle}_评论.csv`;
+            a.download = `${oid}_${safeTitle}_评论.csv`;
 
             document.body.appendChild(a);
             a.click();
