@@ -160,7 +160,7 @@ function initCrawler() {
             <div class="crawler-buttons">
                 <button class="crawler-btn btn-start" id="start-crawl">开始爬取</button>
                 <button class="crawler-btn btn-pause" id="pause-crawl" disabled>暂停</button>
-                <button class="crawler-btn btn-download" id="download-csv" disabled>下载CSV</button>
+                <button class="crawler-btn btn-download" id="download-jsonl" disabled>下载JSONL</button>
             </div>
             <div class="crawler-log" id="crawler-log"></div>
         </div>
@@ -174,7 +174,7 @@ function initCrawler() {
     const body = container.querySelector('.crawler-body');
     const startBtn = container.querySelector('#start-crawl');
     const pauseBtn = container.querySelector('#pause-crawl');
-    const downloadBtn = container.querySelector('#download-csv');
+    const downloadBtn = container.querySelector('#download-jsonl');
     const crawledCount = container.querySelector('#crawled-count');
     const crawlerStatus = container.querySelector('#crawler-status');
     const crawlerLog = container.querySelector('#crawler-log');
@@ -440,22 +440,7 @@ function initCrawler() {
                     count++;
                     crawledCount.textContent = count;
 
-                    const comment = {
-                        parent: reply.parent,
-                        rpid: reply.rpid,
-                        uid: reply.mid,
-                        name: reply.member?.uname || '',
-                        level: reply.member?.level_info?.current_level || '',
-                        sex: reply.member?.sex || '',
-                        avatar: reply.member?.avatar || '',
-                        vip: reply.member?.vip?.vipStatus ? "是" : "否",
-                        IP: reply.reply_control?.location?.slice(5) || "未知",
-                        context: reply.content?.message || '',
-                        reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()),
-                        rereply: 0,
-                        like: reply.like || 0,
-                        sign: reply.member?.sign || ''
-                    };
+                    const comment = JSON.parse(JSON.stringify(reply));
 
                     if (reply.reply_control?.sub_reply_entry_text) {
                         const match = reply.reply_control.sub_reply_entry_text.match(/\d+/);
@@ -569,22 +554,7 @@ function initCrawler() {
                     count++;
                     crawledCount.textContent = count;
 
-                    const comment = {
-                        parent: reply.parent,
-                        rpid: reply.rpid,
-                        uid: reply.mid,
-                        name: reply.member?.uname || '',
-                        level: reply.member?.level_info?.current_level || '',
-                        sex: reply.member?.sex || '',
-                        avatar: reply.member?.avatar || '',
-                        vip: reply.member?.vip?.vipStatus ? "是" : "否",
-                        IP: reply.reply_control?.location?.slice(5) || "未知",
-                        context: reply.content?.message || '',
-                        reply_time: formatTime(new Date(reply.ctime * 1000).toISOString()),
-                        rereply: 0,
-                        like: reply.like || 0,
-                        sign: reply.member?.sign || ''
-                    };
+                    const comment = JSON.parse(JSON.stringify(reply));
 
                     comments.push(comment);
 
@@ -606,52 +576,35 @@ function initCrawler() {
         }
     }
 
-    // 生成CSV并下载 - 修复中文乱码问题
-    function downloadCSV() {
+    // 生成JSONL并下载
+    function downloadJSONL() {
         if (comments.length === 0) {
             addLog('没有评论数据可下载', 'error');
             return;
         }
 
-        addLog('开始生成CSV文件...');
+        addLog('开始生成JSON文件...');
 
         try {
             const headers = ['序号', '上级评论ID', '评论ID', '用户ID', '用户名', '用户等级', '性别', '评论内容', '评论时间', '回复数', '点赞数', '个性签名', 'IP属地', '是否是大会员', '头像'];
             const BOM = '\uFEFF';
-            let csvContent = BOM + headers.join(',') + '\n';
+            let JSONLContent = "";
 
             const batchSize = 1000;
             for (let i = 0; i < comments.length; i += batchSize) {
                 const batch = comments.slice(i, i + batchSize);
-                batch.forEach((comment, index) => {
-                    const row = [
-                        i + index + 1,
-                        comment.parent || '',
-                        comment.rpid,
-                        comment.uid,
-                        `"${(comment.name || '').replace(/"/g, '""')}"`,
-                        comment.level,
-                        comment.sex,
-                        `"${(comment.context || '').replace(/"/g, '""')}"`,
-                        comment.reply_time,
-                        comment.rereply,
-                        comment.like,
-                        `"${(comment.sign || '').replace(/"/g, '""')}"`,
-                        comment.IP,
-                        comment.vip,
-                        comment.avatar
-                    ];
-                    csvContent += row.join(',') + '\n';
+                batch.forEach((comment, _) => {
+                    JSONLContent += JSON.stringify(comment) + '\n';
                 });
             }
 
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+            const blob = new Blob([JSONLContent], { type: 'application/jsonl;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
 
             const safeTitle = (title || 'B站评论').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
-            a.download = `${safeTitle}_评论.csv`;
+            a.download = `${oid}_${safeTitle}_评论.jsonl`;
 
             document.body.appendChild(a);
             a.click();
@@ -659,10 +612,10 @@ function initCrawler() {
             setTimeout(() => {
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-                addLog(`CSV文件已开始下载: ${a.download}`);
+                addLog(`JSONL文件已开始下载: ${a.download}`);
             }, 100);
         } catch (error) {
-            addLog(`生成CSV失败: ${error.message}`, 'error');
+            addLog(`生成JSONL失败: ${error.message}`, 'error');
         }
     }
 
@@ -744,6 +697,6 @@ function initCrawler() {
 
     // 下载按钮事件
     downloadBtn.addEventListener('click', () => {
-        downloadCSV();
+        downloadJSONL();
     });
 }
