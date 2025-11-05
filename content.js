@@ -476,7 +476,18 @@ function initCrawler() {
                         crawlerStatus.textContent = '爬取中...';
                         addLog('暂停结束，继续爬取');
                     }
+                }
 
+                // 每10000条分段下载
+                if (comments.length >= 10000) {
+                    addLog(`已爬取 ${count} 条评论，下载中`, 'warning');
+                    crawlerStatus.textContent = '暂停中...';
+                    downloadJSONL(partial=true);
+                    comments = []
+                    if (stopRequested) break;
+                    // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
+                    crawlerStatus.textContent = '爬取中...';
+                    addLog('暂停结束，继续爬取');
                 }
 
                 localNext = commentData.data?.cursor?.pagination_reply?.next_offset || 0;
@@ -530,6 +541,7 @@ function initCrawler() {
         pauseBtn.classList.remove('btn-continue');
         pauseBtn.classList.add('btn-pause');
         addLog(`评论爬取完成！总共爬取 ${count} 条！`);
+        downloadJSONL();
     }
 
     // 爬取二级评论
@@ -577,7 +589,7 @@ function initCrawler() {
     }
 
     // 生成JSONL并下载
-    function downloadJSONL() {
+    function downloadJSONL(partial=false) {
         if (comments.length === 0) {
             addLog('没有评论数据可下载', 'error');
             return;
@@ -604,7 +616,10 @@ function initCrawler() {
             a.href = url;
 
             const safeTitle = (title || 'B站评论').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
-            a.download = `${oid}_${safeTitle}_评论.jsonl`;
+            if (partial)
+                a.download = `${oid}_${safeTitle}_评论_${count}.jsonl`;
+            else
+                a.download = `${oid}_${safeTitle}_评论.jsonl`;
 
             document.body.appendChild(a);
             a.click();
