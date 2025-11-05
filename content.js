@@ -427,6 +427,7 @@ function initCrawler() {
                 url = `https://api.bilibili.com/x/v2/reply/wbi/main?oid=${oid}&type=${type}&mode=${mode}&pagination_str=${encodeURIComponent(pagination_str)}&plat=1&seek_rpid=&web_location=${web_location}&w_rid=${w_rid}&wts=${wts}`;
             }
 
+            let retry = 3;
             try {
                 const commentData = await makeRequest(url);
                 if (!commentData.data || !commentData.data.replies) {
@@ -476,18 +477,18 @@ function initCrawler() {
                         crawlerStatus.textContent = '爬取中...';
                         addLog('暂停结束，继续爬取');
                     }
-                }
 
-                // 每10000条分段下载
-                if (comments.length >= 10000) {
-                    addLog(`已爬取 ${count} 条评论，下载中`, 'warning');
-                    crawlerStatus.textContent = '暂停中...';
-                    downloadJSONL(partial=true);
-                    comments = []
-                    if (stopRequested) break;
-                    // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
-                    crawlerStatus.textContent = '爬取中...';
-                    addLog('暂停结束，继续爬取');
+                    // 每10000条分段下载
+                    if (comments.length >= 1000) {
+                        addLog(`已爬取 ${count} 条评论，下载中`, 'warning');
+                        crawlerStatus.textContent = '暂停中...';
+                        downloadJSONL(partial=true);
+                        comments = []
+                        if (stopRequested) break;
+                        // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
+                        crawlerStatus.textContent = '爬取中...';
+                        addLog('暂停结束，继续爬取');
+                    }
                 }
 
                 localNext = commentData.data?.cursor?.pagination_reply?.next_offset || 0;
@@ -502,6 +503,7 @@ function initCrawler() {
                     continuePaging = false;
                 }
             } catch (error) {
+                retry--;
                 isCrawling = false;
                 crawlerStatus.textContent = '错误';
                 startBtn.disabled = false;
@@ -511,6 +513,8 @@ function initCrawler() {
                 pauseBtn.classList.remove('btn-continue');
                 pauseBtn.classList.add('btn-pause');
                 addLog(`爬取出错: ${error.message}`, 'error');
+                if (retry)
+                    continue
                 return;
             }
         }
@@ -610,7 +614,9 @@ function initCrawler() {
                 });
             }
 
-            const blob = new Blob([JSONLContent], { type: 'application/jsonl;charset=utf-8' });
+            const b1 = new Blob([JSONLContent], { type: 'application/jsonl;charset=utf-8' });
+            Compress(b1).then((blob)=>{
+            
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -629,9 +635,11 @@ function initCrawler() {
                 URL.revokeObjectURL(url);
                 addLog(`JSONL文件已开始下载: ${a.download}`);
             }, 100);
+            });
         } catch (error) {
             addLog(`生成JSONL失败: ${error.message}`, 'error');
         }
+        
     }
 
     // 开始爬取按钮事件
@@ -714,4 +722,11 @@ function initCrawler() {
     downloadBtn.addEventListener('click', () => {
         downloadJSONL();
     });
+}
+
+async function Compress(s){
+    compressedReadableStream = s.stream().pipeThrough(
+        new CompressionStream("gzip"),
+    );
+    return await new Response(compressedReadableStream).blob();
 }
