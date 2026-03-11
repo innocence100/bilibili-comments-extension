@@ -12,6 +12,23 @@ if (typeof CryptoJS === 'undefined') {
     initCrawler();
 }
 
+// 统一重置 UI 状态的辅助函数
+function resetCrawlerUI(statusText = '就绪') {
+    isCrawling = false;
+    isPaused = false;
+    stopRequested = false;
+    
+    crawlerStatus.textContent = statusText;
+    startBtn.disabled = false;
+    pauseBtn.disabled = true;
+    downloadBtn.disabled = comments.length === 0; // 如果有数据则允许下载
+    
+    pauseBtn.textContent = '暂停';
+    pauseBtn.classList.remove('btn-continue');
+    pauseBtn.classList.add('btn-pause');
+}
+
+
 function initCrawler() {
     // 添加样式
     const style = document.createElement('style');
@@ -153,6 +170,10 @@ function initCrawler() {
             <div class="crawler-toggle">▼</div>
         </div>
         <div class="crawler-body">
+        <div class="crawler-mode-select" style="margin-bottom: 10px;">
+            <label><input type="radio" name="crawl-mode" value="comment" checked> 爬取评论</label>
+            <label><input type="radio" name="crawl-mode" value="danmaku"> 爬取弹幕</label>
+        </div>
             <div class="crawler-stats">
                 <span>已爬取: <span id="crawled-count">0</span> 条</span>
                 <span>状态: <span id="crawler-status">就绪</span></span>
@@ -179,6 +200,11 @@ function initCrawler() {
     const crawlerStatus = container.querySelector('#crawler-status');
     const crawlerLog = container.querySelector('#crawler-log');
 
+
+    // 【新增】获取模式选择的单选框节点列表
+    const modeRadios = container.querySelectorAll('input[name="crawl-mode"]');
+
+
     // 折叠/展开功能
     let isExpanded = false;
     function togglePanel() {
@@ -190,6 +216,30 @@ function initCrawler() {
         }
     }
     header.addEventListener('click', togglePanel);
+
+    // 【新增】监听单选框切换事件
+    modeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            // 如果正在爬取中，不允许切换（可以把单选框 disabled 掉，或者直接在这拦截）
+            if (isCrawling) {
+                e.preventDefault();
+                addLog('爬取过程中无法切换模式！', 'warning');
+                // 恢复回原来的选中状态
+                document.querySelector(`input[name="crawl-mode"][value="${currentMode}"]`).checked = true;
+                return;
+            }
+
+            // 更新当前模式变量
+            currentMode = e.target.value;
+            
+            // 切换模式时，清空之前的计数和日志，显得更清晰
+            count = 0;
+            comments = [];
+            crawledCount.textContent = '0';
+            crawlerLog.innerHTML = '';
+            addLog(`已切换为：${currentMode === 'comment' ? '评论' : '弹幕'}爬取模式`);
+        });
+    });
 
     // 状态变量
     let isCrawling = false;
@@ -203,6 +253,7 @@ function initCrawler() {
     let count = 0;
     let lastPauseTime = 0;
     let pageType = 0; // 1:视频, 2:番剧, 3:动态
+    let currentMode = 'comment';
 
     // 添加日志
     function addLog(message, type = 'info') {
@@ -294,16 +345,25 @@ function initCrawler() {
             })
             .then(text => {
                 let oid = '';
+                let cid = '';
                 switch (pageType) {
                     case 1: {
                         const oidRegex = new RegExp(`"aid":(\\d+),"bvid":"${id}"`);
                         const oidMatch = text.match(oidRegex);
                         oid = oidMatch ? oidMatch[1] : '';
+
+                        // 提取视频的 cid
+                        const cidMatch = text.match(/"cid":(\d+)/);
+                        cid = cidMatch ? cidMatch[1] : '';
                         break;
                     }
                     case 2: {
                         const aidMatch = text.match(/"aid":(\d+),/);
                         oid = aidMatch ? aidMatch[1] : '';
+
+                        // 提取视频的 cid
+                        const cidMatch = text.match(/"cid":(\d+)/);
+                        cid = cidMatch ? cidMatch[1] : '';
                         break;
                     }
                     case 3: {
@@ -327,7 +387,7 @@ function initCrawler() {
                 }
 
                 addLog(`页面类型: ${type}`);
-                resolve({ oid, title });
+                resolve({ oid, cid, title });
             })
             .catch(error => {
                 reject(new Error(`请求页面失败: ${error.message}`));
@@ -375,6 +435,19 @@ function initCrawler() {
         const seconds = String(date.getSeconds()).padStart(2, '0');
         return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
     }
+
+    // 辅助函数：重置 UI
+    function resetUIState(statusText) {
+        isCrawling = false;
+        crawlerStatus.textContent = statusText;
+        startBtn.disabled = false;
+        pauseBtn.disabled = true;
+        downloadBtn.disabled = false;
+        pauseBtn.textContent = '暂停';
+        pauseBtn.classList.remove('btn-continue');
+        pauseBtn.classList.add('btn-pause');
+    }
+
 
     // 爬取评论（迭代实现，支持暂停/继续）
     async function startCrawl(isSecond = true) {
@@ -548,6 +621,8 @@ function initCrawler() {
         downloadJSONL();
     }
 
+
+
     // 爬取二级评论
     async function crawlSecondComments(oid, rootRpid, totalReplies, type) {
         const pageSize = 10;
@@ -592,6 +667,199 @@ function initCrawler() {
         }
     }
 
+// 爬取弹幕（支持暂停/继续、WBI鉴权）
+    async function startCrawlDanmaku() {
+        if (stopRequested) {
+            isCrawling = false;
+            stopRequested = false;
+            crawlerStatus.textContent = '已停止';
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            downloadBtn.disabled = false;
+            pauseBtn.textContent = '暂停';
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
+            addLog('弹幕爬取已停止');
+            return;
+        }
+        
+        // 获取你定义的包 (处理可能存在的未定义情况)
+        const pb = window.protobuf || protobuf;
+        const root = pb.roots["default"];
+        const PrecompiledBilibiliDanmakuProto = root.PrecompiledBilibiliDanmakuProto;
+        if (!PrecompiledBilibiliDanmakuProto) {
+            addLog('找不到 Proto 包，请检查 danmaku.js 是否成功引入且包名正确', 'error');
+            isCrawling = false;
+            resetCrawlerUI(); // 恢复按钮状态
+            return;
+        }
+        const DmSegMobileReply = PrecompiledBilibiliDanmakuProto.DmSegMobileReply;
+
+        let segment_index = 1; // 弹幕按分段获取，1个分段代表视频的6分钟
+        let continueCrawling = true;
+
+        while (continueCrawling && !stopRequested) {
+            await waitIfPaused();
+
+            const wts = Math.floor(Date.now() / 1000);
+            
+            // 动态构造不同分段的参数
+            let params = [];
+            if (segment_index === 1) {
+                // 第一段弹幕参数较多
+                params = [
+                    `type=1`,
+                    `oid=${cid}`,                // 视频的 cid
+                    `pid=${oid}`,                // 视频的 aid/oid
+                    `segment_index=${segment_index}`,
+                    `pull_mode=1`,               // 固定值
+                    `ps=0`,                      // 固定值
+                    `pe=120000`,                 // 固定值
+                    `web_location=1315873`       // 网页端固定 location
+                ];
+            } else {
+                // 后续段弹幕参数
+                params = [
+                    `type=1`,
+                    `oid=${cid}`,                
+                    `pid=${oid}`,                
+                    `segment_index=${segment_index}`,
+                    `web_location=1315873`
+                ];
+            }
+            const paramsStr = params.join('&');
+            // 复用评论爬取的固定 Salt 进行 MD5 加密
+            const code = `${paramsStr}&wts=${wts}ea1db124af3c7062474693fa704f4ff8`;
+            const w_rid = md5(code);
+            
+            // 拼接带 WBI 签名的新版 API URL
+            const url = `https://api.bilibili.com/x/v2/dm/wbi/web/seg.so?${paramsStr}&w_rid=${w_rid}&wts=${wts}`;
+
+            let retry = 3;
+            try {
+                // 发起请求，credentials: 'include' 会自动携带 B站 Cookie (包含 SESSDATA)
+                // 这能保证获取到对应账号权限内最全的弹幕
+                const response = await fetch(url, {
+                    credentials: 'include',
+                    headers: getHeader()
+                });
+
+                if (!(response.ok || response.status === 304)) // status 304 可能是 cdn cache
+                    throw new Error(`HTTP状态码异常: ${response.status}`);
+                
+                const buffer = await response.arrayBuffer();
+                // TODO: 当前逻辑为返回空数据视为结束
+                //       可修改为根据视频时长设置最大 segment_index 
+                //       max_index = duration // 360 +1
+                if (buffer.byteLength === 0) {
+                    addLog(`第 ${segment_index} 段数据为空，视为已到达末尾`);
+                    continueCrawling = false;
+                    break;
+                }
+                const bytes = Array.from(new Uint8Array(buffer)); // 不这么做会报 illegal buffer 错误...
+                if (bytes[0] === 123 && bytes[1] === 34) {
+                    const textDecoder = new TextDecoder();
+                    throw new Error("B站返回了报错JSON，并非弹幕流: " + textDecoder.decode(bytes));
+                }
+                // 解析 Protobuf 数据
+                const reader = new pb.Reader(bytes);
+                const message = DmSegMobileReply.decode(reader);
+                const decoded = DmSegMobileReply.toObject(message, { enums: String, bytes: String });
+                if (decoded.elems && decoded.elems.length > 0) {
+                    for (const elem of decoded.elems) {
+                        if (stopRequested) break;
+                        await waitIfPaused();
+
+                        count++;
+                        crawledCount.textContent = count;
+
+                        // 数据清洗与映射
+                        const danmaku = {
+                            '序号': count,
+                            '弹幕ID': elem.idStr || '',
+                            '出现时间(秒)': (elem.progress / 1000).toFixed(2), // progress 单位是毫秒
+                            '模式': elem.mode,
+                            '字号': elem.fontsize,
+                            '颜色': '#' + (elem.color || 0).toString(16).padStart(6, '0'),
+                            '发送者Hash': elem.midHash || '',
+                            '弹幕内容': elem.content || '',
+                            '发送时间': formatTime(elem.ctime * 1000),
+                            '权重': elem.weight || 0
+                        };
+
+                        // 复用 comments 数组来存放弹幕，这样可以完全兼容你现有的 downloadJSONL 逻辑
+                        comments.push(danmaku);
+
+                        // 复用：每 10000 条分段下载一次，防止内存溢出
+                        if (comments.length >= 10000) {
+                            addLog(`已爬取 ${count} 条弹幕，执行分段下载`, 'warning');
+                            crawlerStatus.textContent = '分段下载中...';
+                            downloadJSONL(true); // 调用你现有的下载函数，传 partial=true
+                            comments = [];
+                            if (stopRequested) break;
+                            crawlerStatus.textContent = '爬取中...';
+                            addLog('分段下载完成，继续爬取');
+                        }
+                    }
+                    addLog(`已爬取第 ${segment_index} 段 (第${(segment_index-1)*6}至${segment_index*6}分钟)，获取 ${decoded.elems.length} 条弹幕`);
+                } else {
+                    // 解析成功但 elems 为空，说明也到底了
+                    continueCrawling = false;
+                }
+
+                if (stopRequested) break;
+
+                // 5. 进行下一段爬取前休眠 1~2 秒，避免被 B 站风控拦截
+                segment_index++;
+                await pauseAwareSleep(1500); 
+
+            } catch (error) {
+                retry--;
+                addLog(`第 ${segment_index} 段爬取出错: ${error.message}`, 'error');
+                if (retry === 0) {
+                    continueCrawling = false;
+                    isCrawling = false;
+                    crawlerStatus.textContent = '错误';
+                    startBtn.disabled = false;
+                    pauseBtn.disabled = true;
+                    pauseBtn.textContent = '暂停';
+                    pauseBtn.classList.remove('btn-continue');
+                    pauseBtn.classList.add('btn-pause');
+                    return;
+                } else {
+                    addLog(`等待2秒后重试第 ${segment_index} 段...`, 'warning');
+                    await pauseAwareSleep(2000);
+                }
+            }
+        }
+
+        // 爬取全部结束后的收尾工作
+        if (stopRequested) {
+            isCrawling = false;
+            crawlerStatus.textContent = '已停止';
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            downloadBtn.disabled = false;
+            pauseBtn.textContent = '暂停';
+            pauseBtn.classList.remove('btn-continue');
+            pauseBtn.classList.add('btn-pause');
+            addLog('弹幕爬取已停止');
+            return;
+        }
+
+        isCrawling = false;
+        isPaused = false;
+        crawlerStatus.textContent = '完成';
+        startBtn.disabled = false;
+        pauseBtn.disabled = true;
+        downloadBtn.disabled = false;
+        pauseBtn.textContent = '暂停';
+        pauseBtn.classList.remove('btn-continue');
+        pauseBtn.classList.add('btn-pause');
+        addLog(`弹幕爬取完成！总共爬取 ${count} 条！`);
+        downloadJSONL(); // 触发最终下载
+    }
+
     // 生成JSONL并下载
     function downloadJSONL(partial=false) {
         if (comments.length === 0) {
@@ -619,11 +887,11 @@ function initCrawler() {
             const a = document.createElement('a');
             a.href = url;
 
-            const safeTitle = (title || 'B站评论').replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
+            const safeTitle = (title || `B站${currentMode === 'comment' ?'评论' :'弹幕' }`).replace(/[\/\\:*?"<>|]/g, '_').substring(0, 50);
             if (partial)
-                a.download = `${oid}_${safeTitle}_评论_${count}.jsonl`;
+                a.download = `${oid}_${safeTitle}_${currentMode === 'comment' ?'评论' :'弹幕' }_${count}.jsonl`;
             else
-                a.download = `${oid}_${safeTitle}_评论_${Date.now()}.jsonl`;
+                a.download = `${oid}_${safeTitle}_${currentMode === 'comment' ?'评论' :'弹幕' }_${Date.now()}.jsonl`;
 
             document.body.appendChild(a);
             a.click();
@@ -671,10 +939,20 @@ function initCrawler() {
             const info = await getInformation(pageId);
             oid = info.oid;
             title = info.title;
+            cid = info.cid;
             addLog(`页面标题: ${title}`);
             addLog(`页面oid: ${oid}`);
+            if (cid) addLog(`页面cid: ${cid}`); // 打印 cid 以供调试
             nextPageID = '';
-            await startCrawl(true);
+            if (currentMode === 'comment'){
+                await startCrawl(true);
+            }
+            else if (currentMode === 'danmaku'){
+                await startCrawlDanmaku(); // 跑新建的弹幕爬取逻辑
+            }
+            else {
+                throw new Error('模式无效');
+            }
         } catch (error) {
             isCrawling = false;
             crawlerStatus.textContent = '错误';

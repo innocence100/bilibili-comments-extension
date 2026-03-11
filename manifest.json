@@ -30,6 +30,8 @@
       ],
       "js": [
         "lib/crypto-js.min.js",
+        "lib/protobuf.min.js",
+        "lib/danmaku.js",
         "content.js"
       ],
       "css": ["popup.css"],
