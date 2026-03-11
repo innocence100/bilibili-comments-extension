@@ -12,24 +12,22 @@ if (typeof CryptoJS === 'undefined') {
     initCrawler();
 }
 
-// 统一重置 UI 状态的辅助函数
-function resetCrawlerUI(statusText = '就绪') {
-    isCrawling = false;
-    isPaused = false;
-    stopRequested = false;
-    
-    crawlerStatus.textContent = statusText;
-    startBtn.disabled = false;
-    pauseBtn.disabled = true;
-    downloadBtn.disabled = comments.length === 0; // 如果有数据则允许下载
-    
-    pauseBtn.textContent = '暂停';
-    pauseBtn.classList.remove('btn-continue');
-    pauseBtn.classList.add('btn-pause');
-}
-
-
 function initCrawler() {
+    // 统一重置 UI 状态的辅助函数
+    function resetCrawlerUI(statusText = '就绪') {
+        isCrawling = false;
+        isPaused = false;
+        stopRequested = false;
+        
+        crawlerStatus.textContent = statusText;
+        startBtn.disabled = false;
+        pauseBtn.disabled = true;
+        downloadBtn.disabled = comments.length === 0; // 如果有数据则允许下载
+        
+        pauseBtn.textContent = '暂停';
+        pauseBtn.classList.remove('btn-continue');
+        pauseBtn.classList.add('btn-pause');
+    }
     // 添加样式
     const style = document.createElement('style');
     style.textContent = `
@@ -234,7 +232,7 @@ function initCrawler() {
             
             // 切换模式时，清空之前的计数和日志，显得更清晰
             count = 0;
-            comments = [];
+
             crawledCount.textContent = '0';
             crawlerLog.innerHTML = '';
             addLog(`已切换为：${currentMode === 'comment' ? '评论' : '弹幕'}爬取模式`);
@@ -245,7 +243,7 @@ function initCrawler() {
     let isCrawling = false;
     let isPaused = false;
     let stopRequested = false;
-    let comments = [];
+
     let bv = '';
     let oid = '';
     let title = '';
@@ -255,6 +253,10 @@ function initCrawler() {
     let pageType = 0; // 1:视频, 2:番剧, 3:动态
     let currentMode = 'comment';
 
+    let currentBufferContent = ""; 
+    let currentBufferSize = 0;
+    const MAX_BUFFER_SIZE = 100 * 1024 * 1024; // 设置为 100MB 下载一次
+    
     // 添加日志
     function addLog(message, type = 'info') {
         const now = new Date();
@@ -436,19 +438,6 @@ function initCrawler() {
         return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
     }
 
-    // 辅助函数：重置 UI
-    function resetUIState(statusText) {
-        isCrawling = false;
-        crawlerStatus.textContent = statusText;
-        startBtn.disabled = false;
-        pauseBtn.disabled = true;
-        downloadBtn.disabled = false;
-        pauseBtn.textContent = '暂停';
-        pauseBtn.classList.remove('btn-continue');
-        pauseBtn.classList.add('btn-pause');
-    }
-
-
     // 爬取评论（迭代实现，支持暂停/继续）
     async function startCrawl(isSecond = true) {
         if (stopRequested) {
@@ -479,7 +468,7 @@ function initCrawler() {
         // 使用循环替代递归，避免调用栈过深
         let localNext = nextPageID || '';
         let continuePaging = true;
-
+        
         while (continuePaging && !stopRequested) {
             await waitIfPaused();
 
@@ -521,7 +510,11 @@ function initCrawler() {
                         comment.rereply = match ? parseInt(match[0]) : 0;
                     }
 
-                    comments.push(comment);
+                    //comments.push(comment);
+                    const line = JSON.stringify(comment) + '\n';
+                    currentBufferContent += line;
+                    // 粗略计算字节数（英文字符1字节，中文粗略算2-3字节，用 length 是个近似值）
+                    currentBufferSize += line.length * 2; // new Blob([line]).size;
 
                     // 爬取二级评论
                     if (isSecond && comment.rereply > 0) {
@@ -552,11 +545,12 @@ function initCrawler() {
                     }
 
                     // 每10000条分段下载
-                    if (comments.length >= 10000) {
-                        addLog(`已爬取 ${count} 条评论，下载中`, 'warning');
+                    if (currentBufferSize >= MAX_BUFFER_SIZE) {
+                        addLog(`数据达到阈值，执行分段下载...`, 'warning');
                         crawlerStatus.textContent = '暂停中...';
                         downloadJSONL(partial=true);
-                        comments = []
+                        currentBufferContent = ""; // 清空内存
+                        currentBufferSize = 0;
                         if (stopRequested) break;
                         // 如果在等待期间被用户暂停，pauseAwareSleep 会在恢复后返回
                         crawlerStatus.textContent = '爬取中...';
@@ -647,7 +641,11 @@ function initCrawler() {
 
                     const comment = JSON.parse(JSON.stringify(reply));
 
-                    comments.push(comment);
+                    //comments.push(comment);
+                    const line = JSON.stringify(comment) + '\n';
+                    currentBufferContent += line;
+                    // 粗略计算字节数（英文字符1字节，中文粗略算2-3字节，用 length 是个近似值）
+                    currentBufferSize += line.length * 2; // new Blob([line]).size;
 
                     if (count % 100 === 0 && count !== lastPauseTime) {
                         lastPauseTime = count;
@@ -788,14 +786,19 @@ function initCrawler() {
                         };
 
                         // 复用 comments 数组来存放弹幕，这样可以完全兼容你现有的 downloadJSONL 逻辑
-                        comments.push(danmaku);
+                        // comments.push(danmaku);
+                        const line = JSON.stringify(danmaku) + '\n';
+                        currentBufferContent += line;
+                        // 粗略计算字节数（英文字符1字节，中文粗略算2-3字节，用 length 是个近似值）
+                        currentBufferSize += line.length * 2; // new Blob([line]).size;
 
                         // 复用：每 10000 条分段下载一次，防止内存溢出
-                        if (comments.length >= 10000) {
-                            addLog(`已爬取 ${count} 条弹幕，执行分段下载`, 'warning');
-                            crawlerStatus.textContent = '分段下载中...';
+                        if (currentBufferSize >= MAX_BUFFER_SIZE) {
+                            addLog(`数据达到阈值，执行分段下载...`, 'warning');
+                            crawlerStatus.textContent = '暂停中...';
                             downloadJSONL(true); // 调用你现有的下载函数，传 partial=true
-                            comments = [];
+                            currentBufferContent = ""; // 清空内存
+                            currentBufferSize = 0;
                             if (stopRequested) break;
                             crawlerStatus.textContent = '爬取中...';
                             addLog('分段下载完成，继续爬取');
@@ -862,7 +865,7 @@ function initCrawler() {
 
     // 生成JSONL并下载
     function downloadJSONL(partial=false) {
-        if (comments.length === 0) {
+        if (currentBufferContent === '') {
             addLog('没有评论数据可下载', 'error');
             return;
         }
@@ -870,17 +873,7 @@ function initCrawler() {
         addLog('开始生成JSON文件...');
 
         try {
-            const headers = ['序号', '上级评论ID', '评论ID', '用户ID', '用户名', '用户等级', '性别', '评论内容', '评论时间', '回复数', '点赞数', '个性签名', 'IP属地', '是否是大会员', '头像'];
-            const BOM = '\uFEFF';
-            let JSONLContent = "";
-
-            const batchSize = 1000;
-            for (let i = 0; i < comments.length; i += batchSize) {
-                const batch = comments.slice(i, i + batchSize);
-                batch.forEach((comment, _) => {
-                    JSONLContent += JSON.stringify(comment) + '\n';
-                });
-            }
+            let JSONLContent = currentBufferContent;
 
             const blob = new Blob([JSONLContent], { type: 'application/jsonl;charset=utf-8' });
             const url = URL.createObjectURL(blob);
@@ -918,7 +911,8 @@ function initCrawler() {
         downloadBtn.disabled = true; // 爬取过程中禁用下载
         crawlerStatus.textContent = '爬取中...';
         crawledCount.textContent = '0';
-        comments = [];
+        currentBufferContent = "";
+        currentBufferSize = 0;
         count = 0;
         lastPauseTime = 0;
 
